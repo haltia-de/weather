@@ -25,23 +25,20 @@ import time
 from datetime import date, datetime
 
 import gi
+from gi.repository import GLib
+
+APP_ID = "io.github.trudenboy.Weather"
+# Under Wayland GTK 3 names the window by the program name: the program's
+# id, as its .desktop file is named, so a desktop or the b8k shell finds it.
+GLib.set_prgname(APP_ID)
 
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402,F811
 
 # The shell's shared pieces (haptics, header, panel badge, questions):
 # optional, so the program runs on any GTK desktop too.
-sys.path.insert(0, "/usr/local/share/b8k/python")
-try:
-    import b8k_ui
-except ImportError:
-    b8k_ui = None
 
-
-def buzzer():
-    """The vibration motor of the tablet, or nothing elsewhere."""
-    return b8k_ui.Buzz() if b8k_ui else (lambda *_args: True)
 
 
 SERVICE = "https://services.gismeteo.ru/inform-service/inf_chrome/"
@@ -449,11 +446,10 @@ def label(text, cls, xalign=0.5, wrap=False):
 # --- the window -------------------------------------------------------------
 class Weather(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id="b8k.Weather")
+        super().__init__(application_id=APP_ID)
         self.win = None
         self.data = None
         self.loading = False
-        self.buzz = buzzer()
         # Nothing is fetched before the window is first drawn: a fetch that
         # came back first rebuilt the whole page before it was ever shown.
         self.drawn = False
@@ -465,11 +461,9 @@ class Weather(Gtk.Application):
             self.win.present()
             return
         provider = Gtk.CssProvider()
-        provider.load_from_data((b8k_ui.HEADER_CSS if b8k_ui else b"") + CSS)
+        provider.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        Gtk.Button()  # the "pressed" signal exists once the class is set up
-        GObject.add_emission_hook(Gtk.Button, "pressed", self.buzz)
 
         self.win = Gtk.ApplicationWindow(application=self, title="Погода")
         self.win.set_default_size(1160, 800)
@@ -805,7 +799,6 @@ class Weather(Gtk.Application):
         return False
 
     def on_city(self, _list, row):
-        self.buzz()
         cid, name = row.city
         save_city(cid, name)
         self.city_id, self.city_name = cid, name

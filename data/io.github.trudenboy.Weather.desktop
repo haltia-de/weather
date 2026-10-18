@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Weather
+Name[ru]=Погода
+Comment=The weather now and for the days ahead, in large type
+Comment[ru]=Погода сейчас и на ближайшие дни крупно
+Exec=b8k-weather
+Icon=io.github.trudenboy.Weather
+Terminal=false
+Categories=GTK;Utility;
+Keywords=weather;forecast;погода;прогноз;
+StartupNotify=true
+X-B8K-Home=true
+X-B8K-Replaces=weather
