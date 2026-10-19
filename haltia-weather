@@ -42,6 +42,9 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402,F811
 
 
 
+# Inside the Haltia shell (its session sets XDG_CURRENT_DESKTOP=Haltia:GNOME).
+ON_HALTIA = "Haltia" in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")
+
 def _config(name):
     """~/.config/haltia/<name>.conf; until 3.0 the file from before the
     rename (~/.config/b8k, ADR 0004) moves there on the first start."""
@@ -482,7 +485,9 @@ class Weather(Gtk.Application):
         self.win = Gtk.ApplicationWindow(application=self, title="Погода")
         self.win.set_default_size(1160, 800)
         bar = Gtk.HeaderBar()
-        bar.set_show_close_button(False)
+        # The Haltia shell closes windows with its own button; any other desktop
+        # gets the usual window buttons in the header.
+        bar.set_show_close_button(not ON_HALTIA)
         heading = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.city_id, self.city_name = load_city()
         self.title = label(self.city_name, "title")
