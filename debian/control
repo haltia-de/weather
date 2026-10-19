@@ -1,0 +1,16 @@
+Source: haltia-weather
+Section: utils
+Priority: optional
+Maintainer: Haltia <rensomail@gmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Homepage: https://github.com/haltia-de/weather
+Rules-Requires-Root: no
+
+Package: haltia-weather
+Architecture: all
+Depends: ${misc:Depends}, python3, python3-gi, gir1.2-gtk-3.0
+Description: weather from Gismeteo, large and on one page
+ Погода (Weather) shows the weather now, today and tomorrow in three-hour
+ steps and the week ahead for a city of one's choice, from Gismeteo's open
+ service. Part of Haltia, a calm touch desktop; it runs on any GTK desktop.

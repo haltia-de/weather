@@ -45,8 +45,8 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402,F811
 def _config(name):
     """~/.config/haltia/<name>.conf; until 3.0 the file from before the
     rename (~/.config/b8k, ADR 0004) moves there on the first start."""
-    new = os.path.expanduser("~/.config/haltia/%s.conf" % name)
-    old = os.path.expanduser("~/.config/b8k/%s.conf" % name)
+    new = os.path.join(GLib.get_user_config_dir(), "haltia", "%s.conf" % name)
+    old = os.path.join(GLib.get_user_config_dir(), "b8k", "%s.conf" % name)
     try:
         if os.path.exists(old) and not os.path.exists(new):
             os.makedirs(os.path.dirname(new), exist_ok=True)
@@ -58,7 +58,7 @@ def _config(name):
 SERVICE = "https://services.gismeteo.ru/inform-service/inf_chrome/"
 CONFIG = _config("weather")
 DEFAULT_CITY = (4079, "Санкт-Петербург")
-CACHE = os.path.expanduser("~/.cache/haltia-weather.json")
+CACHE = os.path.join(GLib.get_user_cache_dir(), "haltia-weather.json")
 REFRESH_SEC = 30 * 60
 STALE_SEC = 20 * 60  # refresh on coming to the front when older than this
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота",

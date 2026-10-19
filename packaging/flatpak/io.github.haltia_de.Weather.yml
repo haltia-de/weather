@@ -1,0 +1,25 @@
+# Погода as a Flatpak: flatpak-builder --user --install build packaging/flatpak/io.github.haltia_de.Weather.yml
+# Python 3, PyGObject and GTK 3 come with the GNOME runtime; the program
+# needs nothing else. Built from this checkout (CI checks out the tag).
+id: io.github.haltia_de.Weather
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: haltia-weather
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+modules:
+  - name: haltia-weather
+    buildsystem: simple
+    build-commands:
+      - install -D -m 755 haltia-weather /app/bin/haltia-weather
+      - install -D -m 644 data/io.github.haltia_de.Weather.desktop /app/share/applications/io.github.haltia_de.Weather.desktop
+      - install -D -m 644 data/io.github.haltia_de.Weather.svg /app/share/icons/hicolor/scalable/apps/io.github.haltia_de.Weather.svg
+      - install -D -m 644 data/io.github.haltia_de.Weather.metainfo.xml /app/share/metainfo/io.github.haltia_de.Weather.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..

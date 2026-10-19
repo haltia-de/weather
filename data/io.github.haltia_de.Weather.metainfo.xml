@@ -18,6 +18,12 @@
   <content_rating type="oars-1.1"/>
   <requires><control>touch</control></requires>
   <releases>
+    <release version="2.1.0" date="2026-10-19">
+      <description>
+        <p>Settings and the forecast cache live in the standard XDG folders, so Weather also runs as a Flatpak and from a Debian or Ubuntu package.</p>
+        <p xml:lang="ru">Настройки и сохранённый прогноз лежат в стандартных папках XDG: Погода работает и как Flatpak, и из пакета для Debian и Ubuntu.</p>
+      </description>
+    </release>
     <release version="2.0.2" date="2026-10-19">
       <description>
         <p>Each version now says what changed; it shows in Settings → Updates.</p>
