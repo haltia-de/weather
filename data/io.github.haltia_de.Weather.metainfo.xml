@@ -18,6 +18,12 @@
   <content_rating type="oars-1.1"/>
   <requires><control>touch</control></requires>
   <releases>
+    <release version="2.1.1" date="2026-10-19">
+      <description>
+        <p>The release also carries packages for Debian, Ubuntu and Flatpak.</p>
+        <p xml:lang="ru">В выпуске теперь есть и пакеты для Debian, Ubuntu и Flatpak.</p>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-10-19">
       <description>
         <p>Settings and the forecast cache live in the standard XDG folders, so Weather also runs as a Flatpak and from a Debian or Ubuntu package.</p>
