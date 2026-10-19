@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Weather
+Name[ru]=Погода
+Comment=The weather now and for the days ahead
+Comment[ru]=Погода сейчас и на ближайшие дни
+Exec=haltia-weather
+Icon=io.github.haltia_de.Weather
+Terminal=false
+Categories=GTK;Utility;
+Keywords=weather;forecast;погода;прогноз;
+StartupNotify=true
+X-B8K-Home=true
+X-B8K-Replaces=weather
+X-Haltia-Home=true
+X-Haltia-Replaces=weather
+X-Flatpak-RenamedFrom=io.github.trudenboy.Weather.desktop;

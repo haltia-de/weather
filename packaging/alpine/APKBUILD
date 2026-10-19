@@ -1,13 +1,17 @@
 # Maintainer: Mikhail Nevskiy <rensomail@gmail.com>
-pkgname=b8k-weather
-pkgver=1.1.1
+pkgname=haltia-weather
+pkgver=2.0.0
 pkgrel=0
-pkgdesc="Погода: The weather now and for the days ahead, in large type (GTK 3)"
-url="https://github.com/trudenboy/b8k-weather"
+pkgdesc="Погода: The weather now and for the days ahead (GTK 3)"
+url="https://github.com/haltia-de/weather"
 arch="noarch"
+# The name before ADR 0004: apk upgrade carries b8k-weather over to this.
+provides="b8k-weather=$pkgver-r$pkgrel"
+replaces="b8k-weather"
 license="GPL-2.0-only"
 depends="python3 py3-gobject3 gtk+3.0"
-source="$pkgname-$pkgver.tar.gz::https://github.com/trudenboy/b8k-weather/archive/v$pkgver.tar.gz"
+source="$pkgname-$pkgver.tar.gz::https://github.com/haltia-de/weather/archive/v$pkgver.tar.gz"
+builddir="$srcdir/weather-$pkgver"
 
 options="!check"
 
