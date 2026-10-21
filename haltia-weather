@@ -19,7 +19,6 @@ import configparser
 import json
 import math
 import os
-import sys
 import threading
 import time
 from datetime import date, datetime
@@ -149,8 +148,9 @@ label.city-where { font-size: 20px; color: #77767b; }
 # --- data -------------------------------------------------------------------
 def num(v, default=None):
     try:
-        return float(v)
-    except (TypeError, ValueError):
+        n = float(v)
+        return n if math.isfinite(n) else default
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -170,7 +170,7 @@ def values(el):
     out = {}
     for k, v in el.attrib.items():
         n = num(v)
-        out[k] = v if n is None or k in ("icon", "descr", "date", "valid") else n
+        out[k] = v if k in ("icon", "descr", "date", "valid") else n
     return out
 
 
@@ -218,7 +218,11 @@ def _read_bounded(fh, deadline):
         if left <= 0:
             raise TimeoutError("weather service took too long")
         _read_timeout(fh, left)
-        chunk = fh.read(min(16 * 1024, FETCH_MAX - total))
+        # read() can perform many socket reads while a server trickles bytes.
+        # read1() returns after one, so the overall deadline is checked again.
+        chunk = fh.read1(min(16 * 1024, FETCH_MAX - total))
+        if time.monotonic() >= deadline:
+            raise TimeoutError("weather service took too long")
         if not chunk:
             break
         parts.append(chunk)
@@ -300,17 +304,36 @@ def fetch(city_id):
                 continue
             day["steps"].append(step)
         data["days"].append(day)
-    return data
+    return validate_forecast(data)
+
+
+def validate_forecast(data):
+    """Keep usable fields and discard invalid numbers before drawing or caching."""
+    if not isinstance(data, dict) or num(data.get("fetched")) is None:
+        raise ValueError("invalid forecast")
+
+    def fields(item):
+        if not isinstance(item, dict):
+            raise ValueError("invalid forecast fields")
+        return {k: (v if k in ("icon", "descr", "date", "valid") else num(v))
+                for k, v in item.items() if k != "steps"}
+
+    clean = dict(data, fetched=num(data["fetched"]), now=fields(data["now"]), days=[])
+    for day in data["days"]:
+        if not iso_date(day.get("date")):
+            continue
+        valid_day = fields(day)
+        valid_day["steps"] = [fields(step) for step in day.get("steps", [])
+                              if iso_when(step.get("valid"))]
+        clean["days"].append(valid_day)
+    return clean
 
 
 def load_cache(city_id):
     try:
         with open(CACHE) as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        drop_cache()
+            data = validate_forecast(json.load(fh))
+    except (OSError, ValueError, TypeError, KeyError):
         return None
     # A forecast kept for another city is no forecast for this one.
     return data if data.get("city_id", DEFAULT_CITY[0]) == city_id else None
@@ -318,11 +341,12 @@ def load_cache(city_id):
 
 def save_cache(data):
     try:
+        data = validate_forecast(data)
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
         with open(CACHE + ".new", "w") as fh:
-            json.dump(data, fh, ensure_ascii=False)
+            json.dump(data, fh, ensure_ascii=False, allow_nan=False)
         os.replace(CACHE + ".new", CACHE)
-    except OSError:
+    except (OSError, ValueError, TypeError, KeyError):
         pass
 
 
@@ -373,13 +397,19 @@ def day_date(iso):
     return "%d %s" % (d.day, MONTHS[d.month - 1])
 
 
+def measurement(value):
+    """A whole measurement, or a dash for an unavailable field."""
+    n = num(value)
+    return "—" if n is None else "%d" % n
+
+
 def precip_text(v):
     """Rain, snow or none, from pt/pr/prflt."""
     kind = whole(v.get("pt"))
     if not kind:
         return ""
     names = {1: "дождь", 2: "снег", 3: "дождь со снегом"}
-    mm = v.get("prflt")
+    mm = num(v.get("prflt"))
     text = names.get(kind, "осадки")
     if mm:
         text += " %s мм" % ("%.1f" % mm).replace(".", ",")
@@ -800,17 +830,17 @@ class Weather(Gtk.Application):
         today = data["days"][0] if data["days"] else {}
         gust = today.get("gust_speed")
         tiles = [
-            ("Ветер", "%d м/с" % (v.get("ws") or 0),
+            ("Ветер", "%s м/с" % measurement(v.get("ws")),
              WIND[wd] if 0 <= wd < len(WIND) else "" + (", порывы до %d" % gust if gust else "")),
-            ("Давление", "%d мм" % (v.get("p") or 0), "рт. ст."),
-            ("Влажность", "%d %%" % (v.get("hum") or 0), ""),
+            ("Давление", "%s мм" % measurement(v.get("p")), "рт. ст."),
+            ("Влажность", "%s %%" % measurement(v.get("hum")), ""),
             ("Вода", deg(v.get("water_t")), ""),
             ("Солнце", "%s – %s" % (hm(v.get("risem")), hm(v.get("setm"))),
              "день %d ч %d мин" % divmod(whole(v.get("durm")), 60)),
             ("Магнитное поле", GEOMAGNETIC[min(9, max(0, whole(v.get("grade"))))].capitalize(), ""),
         ]
         if gust and 0 <= wd < len(WIND):
-            tiles[0] = ("Ветер", "%d м/с" % (v.get("ws") or 0), "%s, порывы до %d" % (WIND[wd], gust))
+            tiles[0] = ("Ветер", "%s м/с" % measurement(v.get("ws")), "%s, порывы до %d" % (WIND[wd], gust))
         if v.get("water_t") is None:
             tiles.pop(3)
         for k, (title, value, extra) in enumerate(tiles):
@@ -842,10 +872,10 @@ class Weather(Gtk.Application):
             slot.pack_start(ic, False, False, 0)
             slot.pack_start(label(deg(step.get("t")), "slot-temp"), False, False, 0)
             wd = whole(step.get("wd"))
-            slot.pack_start(label("%d м/с %s" % (step.get("ws") or 0, WIND_SHORT[wd] if 0 <= wd < 9 else ""),
+            slot.pack_start(label("%s м/с %s" % (measurement(step.get("ws")), WIND_SHORT[wd] if 0 <= wd < 9 else ""),
                                   "slot-small"), False, False, 0)
             rain = precip_text(step)
-            slot.pack_start(label(rain or "%d %%" % (step.get("hum") or 0), "slot-small"),
+            slot.pack_start(label(rain or "%s %%" % measurement(step.get("hum")), "slot-small"),
                             False, False, 0)
             card.pack_start(slot, True, True, 0)
         return card
@@ -1022,9 +1052,9 @@ class Weather(Gtk.Application):
             rain += ", гроза"
         cl = whole(d.get("cl"))
         tiles = [
-            ("Ветер", "%d–%d м/с" % (d.get("wsmin") or 0, d.get("wsmax") or 0), wind_extra),
-            ("Давление", "%d–%d мм" % (d.get("pmin") or 0, d.get("pmax") or 0), "рт. ст."),
-            ("Влажность", "%d–%d %%" % (d.get("hummin") or 0, d.get("hummax") or 0), ""),
+            ("Ветер", "%s–%s м/с" % (measurement(d.get("wsmin")), measurement(d.get("wsmax"))), wind_extra),
+            ("Давление", "%s–%s мм" % (measurement(d.get("pmin")), measurement(d.get("pmax"))), "рт. ст."),
+            ("Влажность", "%s–%s %%" % (measurement(d.get("hummin")), measurement(d.get("hummax"))), ""),
             ("Осадки", rain.capitalize(), ""),
             ("Облачность", CLOUDS[min(3, max(0, cl))].capitalize(), ""),
             ("Солнце", "%s – %s" % (hm(d.get("risem")), hm(d.get("setm"))),
@@ -1060,7 +1090,7 @@ class Weather(Gtk.Application):
             desc.set_valign(Gtk.Align.CENTER)
             desc.pack_start(label(d.get("descr", ""), "day-desc", xalign=0, wrap=True), False, False, 0)
             wd = whole(d.get("wd"))
-            extra = "ветер %d–%d м/с %s" % (d.get("wsmin") or 0, d.get("wsmax") or 0,
+            extra = "ветер %s–%s м/с %s" % (measurement(d.get("wsmin")), measurement(d.get("wsmax")),
                                            WIND_SHORT[wd] if 0 <= wd < 9 else "")
             rain = precip_text(d)
             if rain:
