@@ -64,6 +64,11 @@ DEFAULT_CITY = (4079, "Санкт-Петербург")
 CACHE = os.path.join(GLib.get_user_cache_dir(), "haltia-weather.json")
 REFRESH_SEC = 30 * 60
 STALE_SEC = 20 * 60  # refresh on coming to the front when older than this
+# urlopen's timeout is per socket call, so a slow body never had to finish
+# and the refresh button stayed disabled. The body is read in chunks until
+# this much time has passed since the request started, or this many bytes.
+FETCH_SEC = 15
+FETCH_MAX = 512 * 1024
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота",
             "воскресенье")
 MONTHS = "января февраля марта апреля мая июня июля августа сентября октября ноября декабря".split()
@@ -149,6 +154,17 @@ def num(v, default=None):
         return default
 
 
+def whole(v, default=0):
+    """An int from a forecast field, or default when it is missing or not a number."""
+    n = num(v)
+    if n is None or not math.isfinite(n):
+        return default
+    try:
+        return int(n)
+    except (OverflowError, ValueError):
+        return default
+
+
 def values(el):
     """The attributes of one <values> (or <day>) element, numbers as numbers."""
     out = {}
@@ -179,17 +195,67 @@ def save_city(city_id, name):
         pass
 
 
+def _read_timeout(fh, seconds):
+    """Aim the response socket at the time still left.
+
+    The makefile keeps the socket after urlopen returns. Without this, one
+    read can block for a fresh timeout of its own."""
+    sock = getattr(getattr(fh, "fp", None), "raw", None)
+    sock = getattr(sock, "_sock", None)
+    if sock is None:
+        return
+    try:
+        sock.settimeout(seconds)
+    except OSError:
+        pass
+
+
+def _read_bounded(fh, deadline):
+    parts = []
+    total = 0
+    while total < FETCH_MAX:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("weather service took too long")
+        _read_timeout(fh, left)
+        chunk = fh.read(min(16 * 1024, FETCH_MAX - total))
+        if not chunk:
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return b"".join(parts)
+
+
 def get_xml(url):
     import urllib.request
     import xml.etree.ElementTree as ET
 
     req = urllib.request.Request(url, headers={"User-Agent": "haltia-weather/2.0"})
-    with urllib.request.urlopen(req, timeout=15) as fh:
-        raw = fh.read(512 * 1024)
+    deadline = time.monotonic() + FETCH_SEC
+    with urllib.request.urlopen(req, timeout=FETCH_SEC) as fh:
+        raw = _read_bounded(fh, deadline)
     # The service never sends a DOCTYPE; refusing one keeps entity tricks out.
     if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
         raise ValueError("unexpected DOCTYPE")
     return ET.fromstring(raw)
+
+
+def iso_date(value):
+    try:
+        date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def iso_when(value):
+    """A step time the page can place on the clock. A zoned stamp cannot
+    be compared with the local time and used to crash the drawing."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return parsed.tzinfo is None
 
 
 def find_cities(text):
@@ -219,12 +285,19 @@ def fetch(city_id):
     # risem/setm: sunrise and sunset in minutes after local midnight. (The
     # sunrise/sunset stamps count local time as if it were UTC.)
     data["now"].update({k: num(fact.get(k)) for k in ("risem", "setm", "durm")})
+    # A day without a date, or a step without a time, cannot be drawn.
+    # Cached, it makes the next start raise before refresh, and the bad
+    # file stays.
     for d in loc.iter("day"):
         day = values(d)
+        if not iso_date(day.get("date")):
+            continue
         day["steps"] = []
         for f in d.iter("forecast"):
             step = values(f.find("values"))
             step["valid"] = f.get("valid")
+            if not iso_when(step.get("valid")):
+                continue
             day["steps"].append(step)
         data["days"].append(day)
     return data
@@ -235,6 +308,9 @@ def load_cache(city_id):
         with open(CACHE) as fh:
             data = json.load(fh)
     except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        drop_cache()
         return None
     # A forecast kept for another city is no forecast for this one.
     return data if data.get("city_id", DEFAULT_CITY[0]) == city_id else None
@@ -250,10 +326,21 @@ def save_cache(data):
         pass
 
 
+def drop_cache():
+    try:
+        os.remove(CACHE)
+    except OSError:
+        pass
+
+
 def deg(t):
-    if t is None:
+    t = num(t)
+    if t is None or not math.isfinite(t):
         return "—"
-    t = int(round(t))
+    try:
+        t = int(round(t))
+    except (OverflowError, ValueError):
+        return "—"
     if t > 0:
         return "+%d°" % t
     if t < 0:
@@ -262,7 +349,13 @@ def deg(t):
 
 
 def hm(minutes):
-    return "%d:%02d" % divmod(int(minutes), 60) if minutes is not None else "—"
+    minutes = num(minutes)
+    if minutes is None or not math.isfinite(minutes):
+        return "—"
+    try:
+        return "%d:%02d" % divmod(int(minutes), 60)
+    except (OverflowError, ValueError):
+        return "—"
 
 
 def day_title(iso):
@@ -282,7 +375,7 @@ def day_date(iso):
 
 def precip_text(v):
     """Rain, snow or none, from pt/pr/prflt."""
-    kind = int(v.get("pt") or 0)
+    kind = whole(v.get("pt"))
     if not kind:
         return ""
     names = {1: "дождь", 2: "снег", 3: "дождь со снегом"}
@@ -382,12 +475,29 @@ def cloud(cr, cx, cy, k, rgb):
 
 def draw_pressure(widget, cr, steps):
     w, h = widget.get_allocated_width(), widget.get_allocated_height()
-    vals = [st.get("p") for st in steps]
-    times = [datetime.fromisoformat(st["valid"]) for st in steps]
+    # A step without a pressure or a time used to raise from the draw
+    # signal. Skip it and draw the steps that can be drawn.
+    vals, times = [], []
+    for st in steps or ():
+        if not isinstance(st, dict):
+            continue
+        p = num(st.get("p"))
+        if p is None or not math.isfinite(p):
+            continue
+        try:
+            when = datetime.fromisoformat(st.get("valid"))
+        except (TypeError, ValueError):
+            continue
+        vals.append(p)
+        times.append(when)
+    if len(vals) < 2:
+        return False
     lo, hi = min(vals), max(vals)
     if hi - lo < 6:  # a calm day still reads as a gentle line, not a cliff
         mid = (hi + lo) / 2
         lo, hi = mid - 3, mid + 3
+    if hi <= lo:
+        return False
     left, right, top, bottom = 30, 30, 50, 56
     n = len(vals)
     xs = [left + (w - left - right) * k / (n - 1) for k in range(n)]
@@ -405,10 +515,15 @@ def draw_pressure(widget, cr, steps):
             cr.move_to(x, 8)
             cr.line_to(x, h - 8)
             cr.stroke()
-    # now
+    # now. A time with a zone cannot be compared with the local clock;
+    # skip the marker instead of raising out of the draw signal.
     now = datetime.now()
     for k in range(n - 1):
-        if times[k] <= now < times[k + 1]:
+        try:
+            mark = times[k] <= now < times[k + 1]
+        except TypeError:
+            mark = False
+        if mark:
             f = (now - times[k]).total_seconds() / (times[k + 1] - times[k]).total_seconds()
             x = xs[k] + (xs[k + 1] - xs[k]) * f
             cr.set_source_rgb(0.21, 0.52, 0.89)
@@ -431,7 +546,7 @@ def draw_pressure(widget, cr, steps):
         cr.fill()
         cr.set_source_rgb(0.18, 0.2, 0.21)
         cr.set_font_size(22)
-        text = "%d" % v
+        text = "%d" % whole(v)
         ext = cr.text_extents(text)
         cr.move_to(x - ext.width / 2 - ext.x_bearing, y - 14)
         cr.show_text(text)
@@ -472,6 +587,10 @@ class Weather(Gtk.Application):
         self.drawn = False
         self.want_refresh = False
         self.generation = 0
+        # Set once a forecast could not be drawn, so a bad file is fetched
+        # again once and not in a loop.
+        self.bad_cache = False
+        self.dropping = False
 
     def do_activate(self):
         if self.win:
@@ -595,35 +714,72 @@ class Weather(Gtk.Application):
             page.show_all()
             self.scroll.add(page)
             return
-        self.when.set_text("обновлено в " + datetime.fromtimestamp(data["fetched"]).strftime("%-H:%M"))
-        # The card for now at once, the rest one part per idle turn: the
-        # window shows up sooner and fills in under the reader's eyes.
-        parts = [lambda: [self.now_card(data)]]
-        for d in data["days"][:2]:
-            if d.get("steps"):
-                parts.append(lambda d=d: [
-                    label("%s, %s" % (day_title(d["date"]), day_date(d["date"])), "section", xalign=0),
-                    self.steps_card(d)])
-        steps = [st for d in data["days"][:2] for st in d.get("steps", [])]
-        if len(steps) > 1:
-            parts.append(lambda: [label("Давление, мм рт. ст.", "section", xalign=0),
-                                  self.pressure_card(steps)])
-        parts.append(lambda: [label("На неделю", "section", xalign=0), self.week_card(data["days"])])
+        try:
+            self.when.set_text("обновлено в " + datetime.fromtimestamp(data["fetched"]).strftime("%-H:%M"))
+            # The card for now at once, the rest one part per idle turn: the
+            # window shows up sooner and fills in under the reader's eyes.
+            parts = [lambda: [self.now_card(data)]]
+            for d in data["days"][:2]:
+                if d.get("steps"):
+                    parts.append(lambda d=d: [
+                        label("%s, %s" % (day_title(d["date"]), day_date(d["date"])), "section", xalign=0),
+                        self.steps_card(d)])
+            steps = [st for d in data["days"][:2] for st in d.get("steps", [])]
+            if len(steps) > 1:
+                parts.append(lambda: [label("Давление, мм рт. ст.", "section", xalign=0),
+                                      self.pressure_card(steps)])
+            parts.append(lambda: [label("На неделю", "section", xalign=0), self.week_card(data["days"])])
+        except Exception:
+            self.note_bad_cache(error)
+            return
         self.generation += 1
         gen = self.generation
+        failed = False
 
         def add_part():
-            if gen != self.generation or not parts:
+            nonlocal failed
+            if failed or gen != self.generation or not parts:
                 return False
-            for widget in parts.pop(0)():
+            try:
+                widgets = parts.pop(0)()
+            except Exception:
+                failed = True
+                self.note_bad_cache(error)
+                return False
+            for widget in widgets:
                 page.pack_start(widget, False, False, 0)
                 widget.show_all()
+            if not parts:
+                self.bad_cache = False
             return bool(parts)
 
         add_part()
+        if failed:
+            return
         page.show_all()
         self.scroll.add(page)
         GLib.idle_add(add_part, priority=GLib.PRIORITY_LOW)
+
+    def note_bad_cache(self, error):
+        """Forget a forecast that cannot be drawn, so the next start can refresh."""
+        if self.dropping:
+            return
+        self.dropping = True
+        try:
+            self.data = None
+            self.generation += 1  # stop a draw of this forecast that is still queued
+            drop_cache()
+            again = self.bad_cache
+            self.bad_cache = True
+            if self.stack.get_visible_child_name() != "city":
+                self.close_day()
+            self.show_data(error)
+            if not again:
+                self.refresh()
+            elif not error:
+                self.when.set_text("")
+        finally:
+            self.dropping = False
 
     def now_card(self, data):
         v = data["now"]
@@ -640,20 +796,20 @@ class Weather(Gtk.Application):
 
         grid = Gtk.Grid(column_spacing=28, row_spacing=14)
         grid.set_valign(Gtk.Align.CENTER)
-        wd = int(v.get("wd") or 0)
+        wd = whole(v.get("wd"))
         today = data["days"][0] if data["days"] else {}
         gust = today.get("gust_speed")
         tiles = [
             ("Ветер", "%d м/с" % (v.get("ws") or 0),
-             WIND[wd] if wd < len(WIND) else "" + (", порывы до %d" % gust if gust else "")),
+             WIND[wd] if 0 <= wd < len(WIND) else "" + (", порывы до %d" % gust if gust else "")),
             ("Давление", "%d мм" % (v.get("p") or 0), "рт. ст."),
             ("Влажность", "%d %%" % (v.get("hum") or 0), ""),
             ("Вода", deg(v.get("water_t")), ""),
             ("Солнце", "%s – %s" % (hm(v.get("risem")), hm(v.get("setm"))),
-             "день %d ч %d мин" % divmod(int(v.get("durm") or 0), 60)),
-            ("Магнитное поле", GEOMAGNETIC[min(9, int(v.get("grade") or 0))].capitalize(), ""),
+             "день %d ч %d мин" % divmod(whole(v.get("durm")), 60)),
+            ("Магнитное поле", GEOMAGNETIC[min(9, max(0, whole(v.get("grade"))))].capitalize(), ""),
         ]
-        if gust and wd < len(WIND):
+        if gust and 0 <= wd < len(WIND):
             tiles[0] = ("Ветер", "%d м/с" % (v.get("ws") or 0), "%s, порывы до %d" % (WIND[wd], gust))
         if v.get("water_t") is None:
             tiles.pop(3)
@@ -685,8 +841,8 @@ class Weather(Gtk.Application):
             ic.set_halign(Gtk.Align.CENTER)
             slot.pack_start(ic, False, False, 0)
             slot.pack_start(label(deg(step.get("t")), "slot-temp"), False, False, 0)
-            wd = int(step.get("wd") or 0)
-            slot.pack_start(label("%d м/с %s" % (step.get("ws") or 0, WIND_SHORT[wd] if wd < 9 else ""),
+            wd = whole(step.get("wd"))
+            slot.pack_start(label("%d м/с %s" % (step.get("ws") or 0, WIND_SHORT[wd] if 0 <= wd < 9 else ""),
                                   "slot-small"), False, False, 0)
             rain = precip_text(step)
             slot.pack_start(label(rain or "%d %%" % (step.get("hum") or 0), "slot-small"),
@@ -706,37 +862,40 @@ class Weather(Gtk.Application):
 
     # one day
     def open_day(self, index):
-        days = (self.data or {}).get("days", [])
-        if index >= len(days):
-            self.close_day()
-            return
-        d = days[index]
-        self.day_index = index
-        old = self.day_scroll.get_child()
-        if old:
-            self.day_scroll.remove(old)
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        page.set_margin_start(16)
-        page.set_margin_end(16)
-        page.set_margin_bottom(24)
-        top, tiles = self.day_card(d)
-        page.pack_start(top, False, False, 0)
-        page.pack_start(tiles, False, False, 8)
-        if d.get("steps"):
-            page.pack_start(label("По 3 часа", "section", xalign=0), False, False, 0)
-            page.pack_start(self.steps_card(d), False, False, 0)
-            if len(d["steps"]) > 1:
-                page.pack_start(label("Давление, мм рт. ст.", "section", xalign=0), False, False, 0)
-                page.pack_start(self.pressure_card(d["steps"]), False, False, 0)
-        else:
-            page.pack_start(label("Подробно по часам Gismeteo даёт только сегодня и завтра.",
-                                  "dim", xalign=0, wrap=True), False, False, 12)
-        page.show_all()
-        self.day_scroll.add(page)
-        self.title.set_text("%s, %s" % (day_title(d["date"]), day_date(d["date"])))
-        self.back.show()
-        self.stack.set_visible_child_name("day")
-        self.day_scroll.get_vadjustment().set_value(0)
+        try:
+            days = (self.data or {}).get("days", [])
+            if index >= len(days):
+                self.close_day()
+                return
+            d = days[index]
+            self.day_index = index
+            old = self.day_scroll.get_child()
+            if old:
+                self.day_scroll.remove(old)
+            page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            page.set_margin_start(16)
+            page.set_margin_end(16)
+            page.set_margin_bottom(24)
+            top, tiles = self.day_card(d)
+            page.pack_start(top, False, False, 0)
+            page.pack_start(tiles, False, False, 8)
+            if d.get("steps"):
+                page.pack_start(label("По 3 часа", "section", xalign=0), False, False, 0)
+                page.pack_start(self.steps_card(d), False, False, 0)
+                if len(d["steps"]) > 1:
+                    page.pack_start(label("Давление, мм рт. ст.", "section", xalign=0), False, False, 0)
+                    page.pack_start(self.pressure_card(d["steps"]), False, False, 0)
+            else:
+                page.pack_start(label("Подробно по часам Gismeteo даёт только сегодня и завтра.",
+                                      "dim", xalign=0, wrap=True), False, False, 12)
+            page.show_all()
+            self.day_scroll.add(page)
+            self.title.set_text("%s, %s" % (day_title(d["date"]), day_date(d["date"])))
+            self.back.show()
+            self.stack.set_visible_child_name("day")
+            self.day_scroll.get_vadjustment().set_value(0)
+        except Exception:
+            self.note_bad_cache(None)
 
     # the city
     def city_page(self):
@@ -854,23 +1013,23 @@ class Weather(Gtk.Application):
         main.pack_start(label(d.get("descr", ""), "now-desc", xalign=0, wrap=True), False, False, 0)
         card.pack_start(main, False, False, 0)
 
-        wd = int(d.get("wd") or 0)
-        wind_extra = WIND[wd] if wd < len(WIND) else ""
+        wd = whole(d.get("wd"))
+        wind_extra = WIND[wd] if 0 <= wd < len(WIND) else ""
         if d.get("gust_speed"):
             wind_extra += ", порывы до %d" % d["gust_speed"]
         rain = precip_text(d) or "без осадков"
         if d.get("ts"):
             rain += ", гроза"
-        cl = int(d.get("cl") or 0)
+        cl = whole(d.get("cl"))
         tiles = [
             ("Ветер", "%d–%d м/с" % (d.get("wsmin") or 0, d.get("wsmax") or 0), wind_extra),
             ("Давление", "%d–%d мм" % (d.get("pmin") or 0, d.get("pmax") or 0), "рт. ст."),
             ("Влажность", "%d–%d %%" % (d.get("hummin") or 0, d.get("hummax") or 0), ""),
             ("Осадки", rain.capitalize(), ""),
-            ("Облачность", CLOUDS[min(3, cl)].capitalize(), ""),
+            ("Облачность", CLOUDS[min(3, max(0, cl))].capitalize(), ""),
             ("Солнце", "%s – %s" % (hm(d.get("risem")), hm(d.get("setm"))),
-             "день %d ч %d мин" % divmod(int(d.get("durm") or 0), 60)),
-            ("Магнитное поле", GEOMAGNETIC[min(9, int(d.get("grademax") or 0))].capitalize(), ""),
+             "день %d ч %d мин" % divmod(whole(d.get("durm")), 60)),
+            ("Магнитное поле", GEOMAGNETIC[min(9, max(0, whole(d.get("grademax"))))].capitalize(), ""),
         ]
         # All the values in a card of their own, four to a row.
         grid = Gtk.Grid(column_spacing=28, row_spacing=18, column_homogeneous=True)
@@ -900,9 +1059,9 @@ class Weather(Gtk.Application):
             desc = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             desc.set_valign(Gtk.Align.CENTER)
             desc.pack_start(label(d.get("descr", ""), "day-desc", xalign=0, wrap=True), False, False, 0)
-            wd = int(d.get("wd") or 0)
+            wd = whole(d.get("wd"))
             extra = "ветер %d–%d м/с %s" % (d.get("wsmin") or 0, d.get("wsmax") or 0,
-                                           WIND_SHORT[wd] if wd < 9 else "")
+                                           WIND_SHORT[wd] if 0 <= wd < 9 else "")
             rain = precip_text(d)
             if rain:
                 extra += ", " + rain
