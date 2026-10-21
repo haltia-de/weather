@@ -1,5 +1,15 @@
 # Что нового · What's new
 
+## 2.1.3 (2026-10-21)
+
+### Русский
+
+Неполные данные прогноза от Gismeteo больше не мешают запуску Погоды, а медленная работа сервиса больше не оставляет кнопку обновления заблокированной.
+
+### English
+
+Incomplete forecast data from Gismeteo no longer prevents Weather from starting, and a slow service no longer keeps the refresh button disabled.
+
 ## 2.1.2 (2026-10-19)
 
 ### Русский
