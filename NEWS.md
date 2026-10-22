@@ -1,5 +1,15 @@
 # Что нового · What's new
 
+## 2.1.4 (2026-10-22)
+
+### Русский
+
+Медленный сайт больше не задерживает обновление. Повреждённое значение в прогнозе отображается как «—» вместо пустой страницы (#8).
+
+### English
+
+A slow site no longer keeps the refresh waiting. A damaged forecast value is shown as “—” instead of an empty page (#8).
+
 ## 2.1.3 (2026-10-21)
 
 ### Русский
