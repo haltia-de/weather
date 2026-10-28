@@ -41,8 +41,9 @@ sh install.sh            # в / (нужен root)
 sh install.sh /mnt/root  # в другой корень, например при сборке образа
 ```
 
-`install.sh` кладёт программу в `/usr/local/bin/haltia-weather` (пакет — в
-`/usr`), её `.desktop`, значок и описание AppStream. Сборка пакетов:
+`install.sh` кладёт программу модулем в `/usr/local/lib/haltia-weather/haltia_weather_main.py`
+(так Python берёт её уже скомпилированной), в `/usr/local/bin/haltia-weather` — короткий
+запускающий её файл (пакет — в `/usr`), её `.desktop`, значок и описание AppStream. Сборка пакетов:
 `debian/` и `packaging/flatpak/`, выпуск по тегу — `haltia-de/ci`.
 
 ## Haltia

@@ -16,10 +16,24 @@ modules:
   - name: haltia-weather
     buildsystem: simple
     build-commands:
-      - install -D -m 755 haltia-weather /app/bin/haltia-weather
+      # The program runs from /app/lib/haltia-weather as a module, so Python loads it
+      # compiled; /app/bin/haltia-weather is the stub install.sh writes too.
+      - install -D -m 644 haltia-weather /app/lib/haltia-weather/haltia_weather_main.py
+      - install -d /app/bin
+      - |
+        cat > /app/bin/haltia-weather <<EOF
+        #!/usr/bin/python3
+        # Runs /app/lib/haltia-weather/haltia_weather_main.py as a module, so Python loads it compiled.
+        import runpy
+        import sys
+        sys.path.insert(0, "/app/lib/haltia-weather")
+        runpy.run_module("haltia_weather_main", run_name="__main__", alter_sys=False)
+        EOF
+      - chmod 755 /app/bin/haltia-weather
       - install -D -m 644 data/io.github.haltia_de.Weather.desktop /app/share/applications/io.github.haltia_de.Weather.desktop
       - install -D -m 644 data/io.github.haltia_de.Weather.svg /app/share/icons/hicolor/scalable/apps/io.github.haltia_de.Weather.svg
       - install -D -m 644 data/io.github.haltia_de.Weather.metainfo.xml /app/share/metainfo/io.github.haltia_de.Weather.metainfo.xml
+      - python3 -m compileall -q --invalidation-mode checked-hash /app/lib/haltia-weather
     sources:
       - type: dir
         path: ../..

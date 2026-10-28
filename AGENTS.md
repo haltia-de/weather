@@ -33,6 +33,17 @@ Run `sh install.sh` as root to install under `/usr/local`.
 For a staged package install, use `sh install.sh /path/to/staging /usr`;
 the first argument is the destination root and the second is the prefix.
 
+`install.sh` installs the script as the module
+`PREFIX/lib/haltia-weather/haltia_weather_main.py` and writes
+`PREFIX/bin/haltia-weather` as a stub that runs it with
+`runpy.run_module(..., alter_sys=False)`: Python never caches the script it
+is started by, so the program's code loads from the `__pycache__` the
+package build writes (haltia-de/ci compiles every module). `sys.argv` and
+the command line `python3 PREFIX/bin/haltia-weather` stay as they were (the
+Haltia shell finds programs by it); `__file__` is the module in
+`PREFIX/lib/haltia-weather`. The Flatpak manifest writes the same stub and
+compiles `/app/lib/haltia-weather`.
+
 ## Releases
 
 Obtain the user's explicit approval before publishing a release or its tag.
