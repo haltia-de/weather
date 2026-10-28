@@ -23,7 +23,7 @@ lib=$prefix/lib/haltia-weather
 install -D -m 644 "$here/haltia-weather" "$root$lib/haltia_weather_main.py"
 install -d -m 755 "$root$prefix/bin"
 cat > "$root$prefix/bin/haltia-weather" <<EOF
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Runs $lib/haltia_weather_main.py as a module, so Python loads it compiled.
 import runpy
 import sys
